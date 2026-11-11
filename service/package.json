@@ -7,8 +7,9 @@
     "node": ">=24"
   },
   "scripts": {
+    "dev": "node --env-file=../.env dev/server.mjs",
     "test": "node --test",
-    "check": "find src test -name '*.mjs' -exec node --check {} \\;"
+    "check": "find src test dev -name '*.mjs' -exec node --check {} \\;"
   },
   "files": [
     "src"

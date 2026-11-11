@@ -3,7 +3,6 @@
     { "id": "apisperu", "token": "REEMPLAZAR" },
     { "id": "intifact", "token": "REEMPLAZAR" },
     { "id": "factiliza", "token": "REEMPLAZAR" },
-    { "id": "peruapi-com", "token": "REEMPLAZAR", "billingDay": 1 },
-    { "id": "peruapi-net", "token": "REEMPLAZAR" }
+    { "id": "peruapi-com", "token": "REEMPLAZAR", "billingDay": 1 }
   ]
 }

@@ -1,83 +1,105 @@
 # Sperant DNI Lambda
 
-Servicio interno para resolver nombres y apellidos a partir de un DNI peruano de ocho dígitos. API Gateway recibe la solicitud, SQS encola el trabajo y una Lambda consulta proveedores en orden hasta conseguir una respuesta válida. La API usa AWS IAM (SigV4). El cliente decide qué roles de Sperant pueden invocarla.
+Servicio interno que devuelve nombres y apellidos a partir de un DNI peruano. API Gateway envía el POST a una Lambda, que consulta los proveedores de forma secuencial. Si un proveedor falla, agota su cuota o no encuentra el DNI, la Lambda prueba el siguiente. Devuelve la primera coincidencia válida en la misma respuesta HTTP.
 
-```mermaid
-flowchart LR
-  S[Backend Sperant] -->|POST y GET firmados| A[API Gateway]
-  A --> H[Lambda HTTP]
-  H -->|ID opaco| Q[SQS FIFO]
-  Q --> W[Lambda worker]
-  H <--> D[(DynamoDB: trabajos cifrados)]
-  W <--> D
-  W <--> L[(DynamoDB: cuotas)]
-  W --> P[APISPERU → Intifact → Factiliza → Perú API .com → PerúAPI .net]
-  Q -. fallos persistentes .-> DLQ[SQS DLQ]
+Con la configuración actual, el orden es **Factiliza → Perú API (.com)**. El cupo nominal recurrente de ambas cuentas suma hasta **1.100 consultas al mes**, con un máximo de 50 al día en Perú API. Cada proveedor aplica los límites de su propia cuenta. [Cupos y proveedores disponibles](docs/proveedores.md).
+
+El módulo `service/src/dni` separa la validación de identidad (`domain`), la resolución secuencial (`application`), las integraciones (`infrastructure`) y el contrato HTTP (`transport`). [Plantilla de AWS SAM](template.yaml).
+
+## Levantar en local
+
+Desde la raíz del repositorio, con Node.js 24:
+
+```sh
+npm --prefix service ci --ignore-scripts
+test -f .env || (umask 077 && cp .env.example .env)
 ```
 
-El módulo `service/src/dni` separa las reglas de identidad y cupos (`domain`), la resolución y gestión de trabajos (`application`), las integraciones con AWS y proveedores (`infrastructure`) y los adaptadores HTTP/SQS (`transport`). `bootstrap.mjs` conecta las capas. La infraestructura está en [template.yaml](template.yaml).
+Si `DNI_CLIENT_TOKEN` está vacío, genera un token y copia el valor en esa variable del `.env`:
 
-## Contrato
+```sh
+node -p 'require("node:crypto").randomBytes(32).toString("base64url")'
+```
 
-| Acción | Solicitud / respuesta |
-| --- | --- |
-| Encolar | `POST /v1/dni/lookups`, `Content-Type: application/json`, `Idempotency-Key: <UUID v4 en minúsculas>`, cuerpo `{"dni":"00000001"}`. Responde `202`, `Location` y `Retry-After`. |
-| Leer | `GET /v1/dni/lookups/{id}`. Responde `202` con `Retry-After` mientras esté pendiente, o `200` con los nombres y apellidos si se resolvió. |
-| Reintentar envío | Usa el mismo UUID y DNI tras un error transitorio en el POST. El mismo UUID con otro DNI devuelve `409` dentro del periodo de retención. |
-| Sin resultados | `404 DNI_NOT_FOUND` si todos los proveedores activos indicaron que no encontraron el DNI. `503 PROVIDERS_UNAVAILABLE` si queda algún proveedor sin respuesta concluyente; puede incluir `retryAt`. Si el estado es terminal y quieres intentar de nuevo, usa otro UUID cuando corresponda. |
-| Trabajo no accesible | `404 LOOKUP_NOT_FOUND` si el identificador no existe, venció o pertenece a otro rol. |
+Para iniciar el servidor:
 
-Ejemplo de resultado (datos ficticios):
+```sh
+npm --prefix service run dev
+```
+
+El servidor escucha en `127.0.0.1:3000` y usa datos ficticios. `00000001` devuelve una identidad de ejemplo y `00000002` devuelve `DNI_NOT_FOUND`.
+
+## Usar el endpoint
+
+Envía `POST /v1/dni/consulta` con el DNI como cadena de ocho dígitos para conservar posibles ceros iniciales. En otra terminal, desde la raíz:
+
+```sh
+DNI_BASE_URL='http://127.0.0.1:3000/v1/dni/consulta'
+DNI_CLIENT_TOKEN="$(node --env-file=.env -p 'process.env.DNI_CLIENT_TOKEN')"
+
+curl -i -X POST "$DNI_BASE_URL" \
+  -H "Authorization: Bearer $DNI_CLIENT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"dni":"00000001"}'
+```
+
+Una coincidencia devuelve **200 OK** con el siguiente cuerpo. `apellidoMaterno` puede ser `null`.
 
 ```json
 {
-  "id": "8dafc251-9ea2-49d4-a60f-e9f9a9b2fd76",
   "status": "found",
   "data": {
     "nombres": "Ana María",
     "apellidoPaterno": "De la Cruz",
     "apellidoMaterno": null
   },
-  "provider": "apisperu",
-  "expiresAt": "2026-11-12T18:00:00.000Z"
+  "provider": "demo"
 }
 ```
 
-Desde el backend, firma ambos requests con servicio `execute-api`, la región del stack y el rol de ejecución de Sperant. Da a ese rol solo `execute-api:Invoke` sobre `arn:aws:execute-api:REGION:ACCOUNT:API_ID/$default/POST/v1/dni/lookups` y `arn:aws:execute-api:REGION:ACCOUNT:API_ID/$default/GET/v1/dni/lookups/*`. Cada rol IAM es un límite de acceso; si varias organizaciones usan el mismo rol, Sperant debe aplicar el aislamiento entre ellas en su propio backend. Aplica espera y jitter al sondear estados, especialmente en lotes.
+| HTTP | Respuesta |
+| --- | --- |
+| 400 | `INVALID_DNI` si el cuerpo no es un objeto JSON con un único campo `dni` de ocho dígitos. |
+| 401 | `UNAUTHORIZED` si falta el token Bearer o es inválido. |
+| 403 | Acceso denegado en modo IAM. |
+| 404 | `DNI_NOT_FOUND` cuando todos los proveedores configurados reportan que no encontraron el DNI. |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` si falta `Content-Type: application/json`. |
+| 429 | API Gateway aplicó su límite de peticiones. |
+| 503 | `PROVIDERS_UNAVAILABLE` cuando ningún proveedor pudo resolver la consulta y al menos uno no respondió de forma concluyente, o cuando no hay proveedores configurados. `SERVICE_UNAVAILABLE` indica un error interno. |
+
+Un `503` puede incluir `Retry-After` en segundos y, para `PROVIDERS_UNAVAILABLE`, `retryAt` en UTC. Si el backend reintenta, envía otro POST después de ese plazo. Cada POST puede consumir cupo. El timeout de cada proveedor es de 2,3 segundos y el de la Lambda es de 20 segundos. Todas las respuestas de la Lambda llevan `Cache-Control: no-store`.
+
+## Token y variables de entorno
+
+Configura `DNI_BASE_URL` en el backend con la salida `LookupUrl` del stack. Guarda `DNI_CLIENT_TOKEN` del lado del servidor y envíalo en `Authorization: Bearer <token>`. En AWS, la Lambda lee el mismo token de Secrets Manager mediante `ClientAuthSecretArn`. Usa un token independiente por entorno.
+
+| Variable o parámetro | Uso |
+| --- | --- |
+| `DNI_BASE_URL` | URL completa del POST para el backend. |
+| `DNI_CLIENT_TOKEN` | Token Bearer del backend y del servidor local de pruebas. |
+| `DNI_LOCAL_PORT` | Puerto local opcional. Valor por defecto 3000. |
+| `DNI_TOKEN_FACTILIZA`, `DNI_TOKEN_PERUAPI_COM`, `DNI_TOKEN_APISPERU`, `DNI_TOKEN_INTIFACT` | Llaves de proveedores. Un token vacío deja fuera al proveedor. |
+| `DNI_PERUAPI_COM_BILLING_DAY` | Día de inicio del ciclo de Perú API para estimar el próximo reinicio si se agota el cupo. La cuenta configurada usa el día 11. |
+| `ClientAuthSecretArn`, `ProvidersSecretArn` | ARN de los secretos del token Bearer y de los proveedores, respectivamente. |
+
+Para usar IAM, omite `ClientAuthSecretArn` y firma el POST con SigV4, servicio `execute-api` y región del stack. Concede al rol del backend `execute-api:Invoke` sobre `arn:aws:execute-api:REGION:ACCOUNT:API_ID/$default/POST/v1/dni/consulta`.
 
 ## Configuración y despliegue
 
-Requiere Node.js 24 para el desarrollo y AWS SAM CLI compatible con `nodejs24.x` para desplegar. Las Lambdas usan los clientes SDK incluidos en el [runtime de AWS](https://docs.aws.amazon.com/lambda/latest/dg/lambda-nodejs.html).
+Requiere Node.js 24 y AWS SAM CLI compatible con `nodejs24.x`. La Lambda utiliza el cliente de Secrets Manager incluido en el runtime. [Runtime de Node.js en AWS Lambda](https://docs.aws.amazon.com/lambda/latest/dg/lambda-nodejs.html).
 
-1. Crea el secreto JSON del cifrado en AWS Secrets Manager, en la región y cuenta del stack, con la clave administrada por defecto del servicio. Usa el formato `{"current":"v1","keys":{"v1":"<32 bytes aleatorios en base64 estándar>"}}`. Genera los bytes con `openssl rand -base64 32` en un entorno privado. Para las llaves de los proveedores, elige uno de los dos métodos descritos abajo.
-2. Si activas Perú API (.com), configura los parámetros `WorkerSubnetIds` y `WorkerSecurityGroupIds` con subredes privadas que salgan por **la misma IP elástica** a través de un NAT. Autoriza esa IP en el panel y verifica acceso HTTPS a los proveedores y a los servicios de AWS. Sin esa infraestructura, omite este adaptador. El stack puede generar cargos AWS, en especial si necesitas NAT.
-3. Ejecuta `sam validate --lint`, `sam build` y `sam deploy --guided`. Usa el ARN completo en `KeyringSecretArn`. `AlarmTopicArn` puede apuntar a un SNS existente para avisos de la DLQ. El resultado `LookupUrl` contiene el endpoint.
-4. En staging, habilita un proveedor primero y prueba un DNI autorizado. Confirma la firma, el resultado, las cuotas y el funcionamiento del segundo proveedor al simular que el primero no está disponible.
+La [guía de despliegue](docs/despliegue.md) describe cómo preparar los secretos, autorizar la IP fija que exige Perú API y revisar el stack antes de ejecutarlo.
 
 ### Tokens de proveedores
 
-- **Secrets Manager (recomendado en AWS):** crea un segundo secreto con el formato de [providers.example.json](docs/providers.example.json) e indica su ARN en `ProvidersSecretArn`. Incluye solo los proveedores confirmados con sus llaves reales. El orden de la lista es el orden de consulta. Si se configura este ARN, el worker usa exclusivamente el secreto.
-- **Variables de entorno:** deja `ProvidersSecretArn` vacío y configura en **WorkerFunction** las variables de [.env.example](.env.example). Una variable de token vacía deja fuera a ese proveedor; el resto se usa en el orden mostrado arriba. Para desarrollo puedes guardar valores en un `.env` local excluido de Git y cargarlo con `node --env-file=.env`. AWS no lee ese archivo: configura las variables del worker mediante tu mecanismo de despliegue o en la consola y verifica que se conserven después de actualizar el stack.
+- **Secrets Manager en AWS.** Ejecuta `node scripts/prepare-deploy.mjs --stage prod` para preparar la configuración del `.env`. Carga `providers.json` como secreto y pasa su ARN en `ProvidersSecretArn`. El orden de los proveedores en el secreto es el orden de consulta. [Formato del secreto](docs/providers.example.json).
+- **Variables de la Lambda.** Si dejas `ProvidersSecretArn` vacío, configura los tokens de [.env.example](.env.example) en `HttpFunction` mediante tu mecanismo de despliegue. Se consultan en este orden si están habilitados: APISPERU, Intifact, Factiliza y Perú API (.com).
 
-Sin proveedores configurados, el resultado devuelve `503`. Guarda solo las llaves de API; las contraseñas de los portales no se usan en el servicio.
-
-El uso recurrente y la promoción están detallados en [proveedores.md](docs/proveedores.md). No se crean, compran ni renuevan planes desde el stack.
-
-## Operación y protección de datos
-
-- SQS y su DLQ guardan identificadores opacos. DynamoDB guarda el DNI y los nombres cifrados con AES-256-GCM; el DNI se retira del registro al terminar. El resultado deja de estar disponible a las 24 horas. El [TTL de DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html) hace la eliminación física de manera asíncrona.
-- Los secretos de Secrets Manager se refrescan cada minuto. Para rotar el cifrado, conserva la clave anterior en el mapa, cambia `current` y retírala después de que hayan vencido todos los trabajos que podían usarla (24 horas más margen de caché y ejecuciones en curso).
-- Los logs tienen 14 días y no incluyen DNI, nombres, tokens ni respuestas de proveedores. Usa los estados `auth`, `quota`, `rate_limit`, `temporary` y `invalid_response` para revisar una integración. Ante un fallo en la DLQ, corrige la causa y redirige el mensaje al origen mientras el trabajo siga vigente. Si venció, presenta uno nuevo.
-- SQS puede entregar un mensaje más de una vez. El worker reclama cada trabajo mediante escritura condicional y no repite un trabajo terminado. Si falla después de llamar a un proveedor y antes de guardar el resultado, un reintento puede volver a consumir cupo. Los contadores se reservan antes de enviar el DNI y se comparten entre instancias del mismo stack.
-- El backend debe contar con la base de tratamiento y autorización aplicables antes de enviar un DNI a terceros. Revisa los contratos de los proveedores, su retención y su procedencia conforme a la [Ley 29733 y su reglamento](https://www.gob.pe/institucion/anpd/normas-legales/6554453-16-2024-jus). Este servicio no acredita identidad ni reemplaza una verificación oficial.
+La Lambda procesa el DNI y los nombres durante la solicitud y no los guarda. Los logs de AWS tienen 14 días de retención y registran el resultado técnico de cada proveedor sin DNI, nombres ni tokens.
 
 ## Pruebas locales
 
 ```sh
-cd service
-npm ci --ignore-scripts
-npm run check
-npm test
+npm --prefix service run check
+npm --prefix service test
 ```
-
-Pruebas sin red: contratos de cinco proveedores, fallos, cuotas concurrentes, promoción de 10.000 reservas, aislamiento por rol, idempotencia, retención y cifrado. No requieren credenciales ni usan DNI reales. Complementa con el despliegue de staging y una prueba autorizada antes de producción.

@@ -1,6 +1,6 @@
-import { isDni, isLookupId } from '../domain/identity.mjs';
+import { isDni } from '../domain/identity.mjs';
 
-const BASE = '/v1/dni/lookups';
+export const LOOKUP_PATH = '/v1/dni/consulta';
 
 function response(statusCode, body, headers = {}) {
   return {
@@ -13,11 +13,9 @@ function response(statusCode, body, headers = {}) {
   };
 }
 
-function ownerOf(event) {
+function isIamAuthenticated(event) {
   const iam = event.requestContext?.authorizer?.iam;
-  if (typeof iam?.userId !== 'string' || !iam.userId || !/^[0-9]{12}$/u.test(iam.accountId ?? '')) return null;
-  // STS appends a session name to the stable IAM role ID. One role is one access boundary.
-  return `${iam.accountId}:${iam.userId.split(':')[0]}`;
+  return typeof iam?.userId === 'string' && iam.userId.length > 0 && /^[0-9]{12}$/u.test(iam.accountId ?? '');
 }
 
 function parseBody(event) {
@@ -33,44 +31,34 @@ function parseBody(event) {
   }
 }
 
-export function createHttpHandler({ lookups, log = () => {}, now = Date.now }) {
+export function createHttpHandler({ resolve, authenticate, log = () => {}, now = Date.now }) {
   return async function handle(event) {
-    const owner = ownerOf(event);
-    if (!owner) return response(403, { code: 'FORBIDDEN' });
     try {
-      if (event.routeKey === `POST ${BASE}`) {
-        if (!/^application\/json(?:\s*;|$)/iu.test(event.headers?.['content-type'] ?? '')) {
-          return response(415, { code: 'UNSUPPORTED_MEDIA_TYPE' });
-        }
-        const id = event.headers?.['idempotency-key'];
-        if (!isLookupId(id)) return response(400, { code: 'INVALID_IDEMPOTENCY_KEY' });
-        const dni = parseBody(event);
-        if (!dni) return response(400, { code: 'INVALID_DNI' });
-        const result = await lookups.submit(owner, id, dni);
-        if (result.kind === 'conflict') return response(409, { code: 'IDEMPOTENCY_CONFLICT' });
-        const prefix = event.requestContext?.stage && event.requestContext.stage !== '$default'
-          ? '/' + encodeURIComponent(event.requestContext.stage) : '';
-        return response(202, { id, expiresAt: result.expiresAt }, { location: `${prefix}${BASE}/${id}`, 'retry-after': '2' });
+      const authorized = authenticate ? await authenticate(event.headers?.authorization) : isIamAuthenticated(event);
+      if (!authorized) {
+        return authenticate
+          ? response(401, { code: 'UNAUTHORIZED' }, { 'www-authenticate': 'Bearer' })
+          : response(403, { code: 'FORBIDDEN' });
       }
-      if (event.routeKey !== `GET ${BASE}/{id}`) return response(404, { code: 'ROUTE_NOT_FOUND' });
-      const id = event.pathParameters?.id;
-      if (!isLookupId(id)) return response(404, { code: 'LOOKUP_NOT_FOUND' });
-      const result = await lookups.read(owner, id);
-      const expiresAt = result.expiresAt;
-      const retryAt = result.retryAt ? new Date(result.retryAt).toISOString() : undefined;
+      if (event.routeKey !== `POST ${LOOKUP_PATH}`) return response(404, { code: 'ROUTE_NOT_FOUND' });
+      if (!/^application\/json(?:\s*;|$)/iu.test(event.headers?.['content-type'] ?? '')) {
+        return response(415, { code: 'UNSUPPORTED_MEDIA_TYPE' });
+      }
+      const dni = parseBody(event);
+      if (!dni) return response(400, { code: 'INVALID_DNI' });
+      const result = await resolve(dni);
       switch (result.kind) {
-        case 'pending':
-          return response(202, { id, status: 'pending', retryAt, expiresAt }, {
-            'retry-after': String(result.retryAt ? Math.max(2, Math.ceil((result.retryAt - now()) / 1000)) : 2),
-          });
         case 'found':
-          return response(200, { id, status: 'found', data: result.data, provider: result.provider, expiresAt });
+          return response(200, { status: 'found', data: result.data, provider: result.provider });
         case 'not_found':
-          return response(404, { id, code: 'DNI_NOT_FOUND', expiresAt });
-        case 'missing':
-          return response(404, { code: 'LOOKUP_NOT_FOUND' });
-        case 'unavailable':
-          return response(503, { id, code: 'PROVIDERS_UNAVAILABLE', retryAt, expiresAt });
+          return response(404, { code: 'DNI_NOT_FOUND' });
+        case 'unavailable': {
+          const retry = result.retryAt;
+          const headers = retry ? { 'retry-after': String(Math.max(1, Math.ceil((retry - now()) / 1000))) } : {};
+          return response(503, {
+            code: 'PROVIDERS_UNAVAILABLE', retryAt: retry ? new Date(retry).toISOString() : undefined,
+          }, headers);
+        }
         default:
           throw new Error('Unexpected lookup outcome');
       }

@@ -4,7 +4,6 @@ const tokens = [
   ['intifact', 'DNI_TOKEN_INTIFACT'],
   ['factiliza', 'DNI_TOKEN_FACTILIZA'],
   ['peruapi-com', 'DNI_TOKEN_PERUAPI_COM'],
-  ['peruapi-net', 'DNI_TOKEN_PERUAPI_NET'],
 ];
 
 export function createProviderConfigLoader({ env, loadSecret }) {
@@ -16,10 +15,7 @@ export function createProviderConfigLoader({ env, loadSecret }) {
     const token = env[variable];
     if (!token?.trim()) continue;
     const provider = { id, token };
-    if (id === 'apisperu') {
-      if (env.DNI_APISPERU_PROMOTION_UNTIL) provider.promotionUntil = env.DNI_APISPERU_PROMOTION_UNTIL;
-      if (env.DNI_APISPERU_PROMOTION_LIMIT) provider.promotionLimit = Number(env.DNI_APISPERU_PROMOTION_LIMIT);
-    } else if (id === 'peruapi-com' && env.DNI_PERUAPI_COM_BILLING_DAY) {
+    if (id === 'peruapi-com' && env.DNI_PERUAPI_COM_BILLING_DAY) {
       provider.billingDay = Number(env.DNI_PERUAPI_COM_BILLING_DAY);
     }
     providers.push(provider);

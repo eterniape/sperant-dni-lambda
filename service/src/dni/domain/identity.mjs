@@ -2,11 +2,6 @@ export function isDni(value) {
   return typeof value === 'string' && /^[0-9]{8}$/u.test(value);
 }
 
-export function isLookupId(value) {
-  return typeof value === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value);
-}
-
 function cleanName(value) {
   if (typeof value !== 'string' || /[\p{Cc}\p{Cf}]/u.test(value)) return null;
   const name = value.normalize('NFC').trim().replace(/\s+/gu, ' ');
