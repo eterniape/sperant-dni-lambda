@@ -6,6 +6,7 @@ import { createJobStore } from './dni/infrastructure/jobs.mjs';
 import { createVault } from './dni/infrastructure/vault.mjs';
 import { jsonSecret } from './dni/infrastructure/secret.mjs';
 import { createProviders } from './dni/infrastructure/providers.mjs';
+import { createProviderConfigLoader } from './dni/infrastructure/provider-config.mjs';
 import { createLookups, createProcessor } from './dni/application/lookups.mjs';
 import { createResolver } from './dni/application/resolve-dni.mjs';
 import { createHttpHandler } from './dni/transport/http.mjs';
@@ -41,11 +42,11 @@ export const http = createHttpHandler({
 });
 
 const quotas = createQuotaStore(table(process.env.QUOTAS_TABLE));
-const providerSecret = secret(process.env.PROVIDERS_SECRET_ARN);
+const loadProviderConfig = createProviderConfigLoader({ env: process.env, loadSecret: secret });
 let cachedConfig;
 let resolver;
 const resolve = async (dni, misses) => {
-  const config = await providerSecret();
+  const config = await loadProviderConfig();
   if (config !== cachedConfig) {
     resolver = createResolver({ providers: createProviders(config), quotas, observe: log });
     cachedConfig = config;

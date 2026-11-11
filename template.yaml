@@ -8,8 +8,9 @@ Parameters:
     AllowedPattern: 'arn:[^:]+:secretsmanager:[^:]+:[0-9]{12}:secret:.+'
   ProvidersSecretArn:
     Type: String
-    Description: Full ARN of the JSON provider configuration in Secrets Manager
-    AllowedPattern: 'arn:[^:]+:secretsmanager:[^:]+:[0-9]{12}:secret:.+'
+    Default: ''
+    Description: Full ARN of the provider configuration in Secrets Manager, or empty to use worker environment variables
+    AllowedPattern: '(|arn:[^:]+:secretsmanager:[^:]+:[0-9]{12}:secret:.+)'
   WorkerSubnetIds:
     Type: String
     Default: ''
@@ -34,6 +35,7 @@ Rules:
         AssertDescription: Set both WorkerSubnetIds and WorkerSecurityGroupIds, or leave both empty.
 
 Conditions:
+  HasProvidersSecret: !Not [!Equals [!Ref ProvidersSecretArn, '']]
   HasWorkerVpc: !Not [!Equals [!Ref WorkerSubnetIds, '']]
   HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, '']]
 
@@ -128,7 +130,7 @@ Resources:
       Environment:
         Variables:
           QUOTAS_TABLE: !Ref Quotas
-          PROVIDERS_SECRET_ARN: !Ref ProvidersSecretArn
+          PROVIDERS_SECRET_ARN: !If [HasProvidersSecret, !Ref ProvidersSecretArn, !Ref 'AWS::NoValue']
       Events:
         Lookup:
           Type: SQS
@@ -166,7 +168,10 @@ Resources:
                 Resource: !GetAtt LookupQueue.Arn
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: [!Ref KeyringSecretArn, !Ref ProvidersSecretArn]
+                Resource: !If
+                  - HasProvidersSecret
+                  - [!Ref KeyringSecretArn, !Ref ProvidersSecretArn]
+                  - [!Ref KeyringSecretArn]
 
   Jobs:
     Type: AWS::DynamoDB::Table

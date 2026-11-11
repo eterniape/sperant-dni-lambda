@@ -15,7 +15,7 @@ flowchart LR
   Q -. fallos persistentes .-> DLQ[SQS DLQ]
 ```
 
-El módulo `service/src/dni` separa las reglas de identidad y cupos (`domain`), la resolución y gestión de trabajos (`application`), las integraciones con AWS y proveedores (`infrastructure`) y los adaptadores HTTP/SQS (`transport`). `bootstrap.mjs` conecta las capas. La infraestructura está en [template.yaml](template.yaml). Los adaptadores se activan y ordenan desde Secrets Manager.
+El módulo `service/src/dni` separa las reglas de identidad y cupos (`domain`), la resolución y gestión de trabajos (`application`), las integraciones con AWS y proveedores (`infrastructure`) y los adaptadores HTTP/SQS (`transport`). `bootstrap.mjs` conecta las capas. La infraestructura está en [template.yaml](template.yaml).
 
 ## Contrato
 
@@ -49,17 +49,24 @@ Desde el backend, firma ambos requests con servicio `execute-api`, la región de
 
 Requiere Node.js 24 para el desarrollo y AWS SAM CLI compatible con `nodejs24.x` para desplegar. Las Lambdas usan los clientes SDK incluidos en el [runtime de AWS](https://docs.aws.amazon.com/lambda/latest/dg/lambda-nodejs.html).
 
-1. Crea dos secretos JSON en AWS Secrets Manager, en la región y cuenta del stack, con la clave administrada por defecto del servicio. En el primero, usa el formato `{"current":"v1","keys":{"v1":"<32 bytes aleatorios en base64 estándar>"}}`. Genera los bytes con `openssl rand -base64 32` en un entorno privado. En el segundo usa el formato de [providers.example.json](docs/providers.example.json), incluye solo los proveedores confirmados y reemplaza cada marcador por la llave real. El orden de la lista es el orden de consulta. `{"providers":[]}` es válido para un despliegue inicial y devuelve `503` en el resultado.
-2. Si activas Perú API (.com), configura los parámetros `WorkerSubnetIds` y `WorkerSecurityGroupIds` con subredes privadas que salgan por **la misma IP elástica** a través de un NAT. Autoriza esa IP en el panel y verifica acceso HTTPS a los proveedores y a los servicios de AWS. Sin esa infraestructura, omite este adaptador del secreto. El stack puede generar cargos AWS, en especial si necesitas NAT.
-3. Ejecuta `sam validate --lint`, `sam build` y `sam deploy --guided`. Usa `KeyringSecretArn` y `ProvidersSecretArn` con los ARN completos. `AlarmTopicArn` puede apuntar a un SNS existente para avisos de la DLQ. El resultado `LookupUrl` contiene el endpoint.
+1. Crea el secreto JSON del cifrado en AWS Secrets Manager, en la región y cuenta del stack, con la clave administrada por defecto del servicio. Usa el formato `{"current":"v1","keys":{"v1":"<32 bytes aleatorios en base64 estándar>"}}`. Genera los bytes con `openssl rand -base64 32` en un entorno privado. Para las llaves de los proveedores, elige uno de los dos métodos descritos abajo.
+2. Si activas Perú API (.com), configura los parámetros `WorkerSubnetIds` y `WorkerSecurityGroupIds` con subredes privadas que salgan por **la misma IP elástica** a través de un NAT. Autoriza esa IP en el panel y verifica acceso HTTPS a los proveedores y a los servicios de AWS. Sin esa infraestructura, omite este adaptador. El stack puede generar cargos AWS, en especial si necesitas NAT.
+3. Ejecuta `sam validate --lint`, `sam build` y `sam deploy --guided`. Usa el ARN completo en `KeyringSecretArn`. `AlarmTopicArn` puede apuntar a un SNS existente para avisos de la DLQ. El resultado `LookupUrl` contiene el endpoint.
 4. En staging, habilita un proveedor primero y prueba un DNI autorizado. Confirma la firma, el resultado, las cuotas y el funcionamiento del segundo proveedor al simular que el primero no está disponible.
+
+### Tokens de proveedores
+
+- **Secrets Manager (recomendado en AWS):** crea un segundo secreto con el formato de [providers.example.json](docs/providers.example.json) e indica su ARN en `ProvidersSecretArn`. Incluye solo los proveedores confirmados con sus llaves reales. El orden de la lista es el orden de consulta. Si se configura este ARN, el worker usa exclusivamente el secreto.
+- **Variables de entorno:** deja `ProvidersSecretArn` vacío y configura en **WorkerFunction** las variables de [.env.example](.env.example). Una variable de token vacía deja fuera a ese proveedor; el resto se usa en el orden mostrado arriba. Para desarrollo puedes guardar valores en un `.env` local excluido de Git y cargarlo con `node --env-file=.env`. AWS no lee ese archivo: configura las variables del worker mediante tu mecanismo de despliegue o en la consola y verifica que se conserven después de actualizar el stack.
+
+Sin proveedores configurados, el resultado devuelve `503`. Guarda solo las llaves de API; las contraseñas de los portales no se usan en el servicio.
 
 El uso recurrente y la promoción están detallados en [proveedores.md](docs/proveedores.md). No se crean, compran ni renuevan planes desde el stack.
 
 ## Operación y protección de datos
 
 - SQS y su DLQ guardan identificadores opacos. DynamoDB guarda el DNI y los nombres cifrados con AES-256-GCM; el DNI se retira del registro al terminar. El resultado deja de estar disponible a las 24 horas. El [TTL de DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html) hace la eliminación física de manera asíncrona.
-- Las llaves se refrescan cada minuto. Para rotar el cifrado, conserva la clave anterior en el mapa, cambia `current` y retírala después de que hayan vencido todos los trabajos que podían usarla (24 horas más margen de caché y ejecuciones en curso). La contraseña del portal no va en el secreto de proveedores.
+- Los secretos de Secrets Manager se refrescan cada minuto. Para rotar el cifrado, conserva la clave anterior en el mapa, cambia `current` y retírala después de que hayan vencido todos los trabajos que podían usarla (24 horas más margen de caché y ejecuciones en curso).
 - Los logs tienen 14 días y no incluyen DNI, nombres, tokens ni respuestas de proveedores. Usa los estados `auth`, `quota`, `rate_limit`, `temporary` y `invalid_response` para revisar una integración. Ante un fallo en la DLQ, corrige la causa y redirige el mensaje al origen mientras el trabajo siga vigente. Si venció, presenta uno nuevo.
 - SQS puede entregar un mensaje más de una vez. El worker reclama cada trabajo mediante escritura condicional y no repite un trabajo terminado. Si falla después de llamar a un proveedor y antes de guardar el resultado, un reintento puede volver a consumir cupo. Los contadores se reservan antes de enviar el DNI y se comparten entre instancias del mismo stack.
 - El backend debe contar con la base de tratamiento y autorización aplicables antes de enviar un DNI a terceros. Revisa los contratos de los proveedores, su retención y su procedencia conforme a la [Ley 29733 y su reglamento](https://www.gob.pe/institucion/anpd/normas-legales/6554453-16-2024-jus). Este servicio no acredita identidad ni reemplaza una verificación oficial.
