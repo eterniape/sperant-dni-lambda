@@ -1,0 +1,10 @@
+.local/
+.aws-sam/
+node_modules/
+coverage/
+.env
+.env.*
+!.env.example
+*.pem
+.DS_Store
+samconfig.toml

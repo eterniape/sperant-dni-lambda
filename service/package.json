@@ -1,0 +1,16 @@
+{
+  "name": "sperant-dni-lambda",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "find src test -name '*.mjs' -exec node --check {} \\;"
+  },
+  "files": [
+    "src"
+  ]
+}

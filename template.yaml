@@ -1,0 +1,230 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Sperant internal DNI lookup service
+Parameters:
+  KeyringSecretArn:
+    Type: String
+    Description: Full ARN of the JSON keyring in Secrets Manager
+    AllowedPattern: 'arn:[^:]+:secretsmanager:[^:]+:[0-9]{12}:secret:.+'
+  ProvidersSecretArn:
+    Type: String
+    Description: Full ARN of the JSON provider configuration in Secrets Manager
+    AllowedPattern: 'arn:[^:]+:secretsmanager:[^:]+:[0-9]{12}:secret:.+'
+  WorkerSubnetIds:
+    Type: String
+    Default: ''
+    Description: Optional comma-separated private subnet IDs with shared NAT egress
+    AllowedPattern: '(|subnet-[a-f0-9]+(,subnet-[a-f0-9]+)*)'
+  WorkerSecurityGroupIds:
+    Type: String
+    Default: ''
+    Description: Optional comma-separated worker security groups in the same VPC
+    AllowedPattern: '(|sg-[a-f0-9]+(,sg-[a-f0-9]+)*)'
+  AlarmTopicArn:
+    Type: String
+    Default: ''
+    Description: Optional existing SNS topic for queue alerts
+
+Rules:
+  WorkerNetwork:
+    Assertions:
+      - Assert: !Or
+          - !And [!Equals [!Ref WorkerSubnetIds, ''], !Equals [!Ref WorkerSecurityGroupIds, '']]
+          - !And [!Not [!Equals [!Ref WorkerSubnetIds, '']], !Not [!Equals [!Ref WorkerSecurityGroupIds, '']]]
+        AssertDescription: Set both WorkerSubnetIds and WorkerSecurityGroupIds, or leave both empty.
+
+Conditions:
+  HasWorkerVpc: !Not [!Equals [!Ref WorkerSubnetIds, '']]
+  HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, '']]
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    Architectures: [arm64]
+    CodeUri: service/
+    MemorySize: 256
+    Environment:
+      Variables:
+        JOBS_TABLE: !Ref Jobs
+        KEYRING_SECRET_ARN: !Ref KeyringSecretArn
+        QUEUE_URL: !Ref LookupQueue
+
+Resources:
+  HttpLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+  WorkerLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+  AccessLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+
+  InternalApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      Auth:
+        EnableIamAuthorizer: true
+        DefaultAuthorizer: AWS_IAM
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 40
+        ThrottlingRateLimit: 30
+      AccessLogSettings:
+        DestinationArn: !GetAtt AccessLogs.Arn
+        Format: '{"requestId":"$context.requestId","route":"$context.routeKey","status":"$context.status"}'
+
+  HttpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/bootstrap.http
+      Timeout: 12
+      LoggingConfig:
+        LogGroup: !Ref HttpLogs
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ['dynamodb:GetItem', 'dynamodb:PutItem']
+              Resource: !GetAtt Jobs.Arn
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt LookupQueue.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref KeyringSecretArn
+      Events:
+        Submit:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref InternalApi
+            Path: /v1/dni/lookups
+            Method: POST
+            PayloadFormatVersion: '2.0'
+        GetLookup:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref InternalApi
+            Path: /v1/dni/lookups/{id}
+            Method: GET
+            PayloadFormatVersion: '2.0'
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/bootstrap.worker
+      Timeout: 40
+      ReservedConcurrentExecutions: 8
+      LoggingConfig:
+        LogGroup: !Ref WorkerLogs
+      Role: !GetAtt WorkerRole.Arn
+      VpcConfig: !If
+        - HasWorkerVpc
+        - SubnetIds: !Split [',', !Ref WorkerSubnetIds]
+          SecurityGroupIds: !Split [',', !Ref WorkerSecurityGroupIds]
+        - !Ref AWS::NoValue
+      Environment:
+        Variables:
+          QUOTAS_TABLE: !Ref Quotas
+          PROVIDERS_SECRET_ARN: !Ref ProvidersSecretArn
+      Events:
+        Lookup:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt LookupQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes: [ReportBatchItemFailures]
+            ScalingConfig:
+              MaximumConcurrency: 8
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns: !If
+        - HasWorkerVpc
+        - - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+        - - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: ProcessDniLookups
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['dynamodb:GetItem', 'dynamodb:PutItem']
+                Resource: [!GetAtt Jobs.Arn, !GetAtt Quotas.Arn]
+              - Effect: Allow
+                Action: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:ChangeMessageVisibility']
+                Resource: !GetAtt LookupQueue.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: [!Ref KeyringSecretArn, !Ref ProvidersSecretArn]
+
+  Jobs:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}]
+      SSESpecification: {SSEEnabled: true}
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+  Quotas:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: pk, AttributeType: S}]
+      KeySchema: [{AttributeName: pk, KeyType: HASH}]
+      SSESpecification: {SSEEnabled: true}
+
+  LookupQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      FifoQueue: true
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 240
+      MessageRetentionPeriod: 86400
+      MaximumMessageSize: 1024
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 50
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      FifoQueue: true
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 345600
+
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: DNI lookup messages could not be processed
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref 'AWS::NoValue']
+
+Outputs:
+  ApiId:
+    Value: !Ref InternalApi
+  LookupUrl:
+    Value: !Sub 'https://${InternalApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/v1/dni/lookups'
+  DeadLetterQueueUrl:
+    Value: !Ref DeadLetterQueue
