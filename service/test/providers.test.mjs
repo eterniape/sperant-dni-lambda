@@ -9,7 +9,6 @@ const expected = { kind: 'found', data: { nombres: 'Ana María', apellidoPaterno
 
 for (const [id, path, body, auth] of [
   ['apisperu', '/api/v1/dni/00000001', { ...camel, codVerifica: '7' }, 'query'],
-  ['intifact', '/api/v1/dni/00000001', { success: true, data: camel }, 'bearer'],
   ['factiliza', '/v1/dni/info/00000001', { success: true, data: { ...snake, numero: dni, direccion: 'Omitir' } }, 'bearer'],
   ['peruapi-com', '/api/dni/00000001', { ...snake, code: '200' }, 'api-key'],
 ]) {
@@ -34,6 +33,7 @@ test('separates 404, invalid payload, quota, rate limit, invalid credential and 
   const now = Date.parse('2026-11-12T02:00:00Z');
   for (const [makeResponse, kind, until] of [
     [() => Response.json({ success: false }, { status: 404 }), 'not_found'],
+    [() => Response.json({ success: false, message: 'No se encontraron resultados.' }), 'not_found'],
     [() => new Response('<html>Proxy error</html>', { status: 404 }), 'temporary'],
     [() => Response.json({ ...camel, dni: '00000002' }), 'invalid_response'],
     [() => Response.json({ success: false, message: 'Cuota mensual agotada' }), 'quota', Date.parse('2026-12-01T05:00:00Z')],
@@ -51,5 +51,5 @@ test('separates 404, invalid payload, quota, rate limit, invalid credential and 
 
 test('rejects invalid provider configuration', () => {
   assert.throws(() => createProviders({ providers: [{ id: 'peruapi-com', token: 'test', billingDay: 32 }] }));
-  assert.throws(() => createProviders({ providers: [{ id: 'intifact', token: 'REEMPLAZAR' }] }));
+  assert.throws(() => createProviders({ providers: [{ id: 'apisperu', token: 'REEMPLAZAR' }] }));
 });

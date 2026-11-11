@@ -1,7 +1,6 @@
 // Preserve the documented priority when providers are configured with individual variables.
 const tokens = [
   ['apisperu', 'DNI_TOKEN_APISPERU'],
-  ['intifact', 'DNI_TOKEN_INTIFACT'],
   ['factiliza', 'DNI_TOKEN_FACTILIZA'],
   ['peruapi-com', 'DNI_TOKEN_PERUAPI_COM'],
 ];

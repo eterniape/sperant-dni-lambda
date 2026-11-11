@@ -1,6 +1,6 @@
 # Despliegue a producción
 
-El stack crea una Lambda, una ruta POST en API Gateway y los grupos de logs. La configuración local tiene Factiliza como primer proveedor y Perú API (.com) como respaldo.
+El stack crea una Lambda, una ruta POST en API Gateway y los grupos de logs. El orden predeterminado es APISPERU, Factiliza y Perú API (.com).
 
 ## Preparar la sesión y los secretos
 

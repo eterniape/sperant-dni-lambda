@@ -96,7 +96,7 @@ Resources:
       CodeUri: service/
       Handler: src/bootstrap.http
       MemorySize: 256
-      Timeout: 20
+      Timeout: 27
       LoggingConfig:
         LogGroup: !Ref HttpLogs
       Role: !GetAtt HttpRole.Arn

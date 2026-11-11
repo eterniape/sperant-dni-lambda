@@ -5,10 +5,9 @@ Fuentes públicas revisadas el 11 de noviembre de 2026. El orden es una propuest
 | Prioridad | Proveedor | Consultas gratis recurrentes | Condiciones |
 | --- | --- | ---: | --- |
 | 1 | [APISPERU](https://apisperu.com/servicios/dniruc) | 1.000/mes | La página anuncia un primer mes ilimitado. Confirma elegibilidad, fecha de vencimiento, límites y que la cuenta vuelva al plan gratis antes de activar la promoción. [Contrato HTTP](https://dniruc.apisperu.com/doc/swagger). |
-| 2 | [Intifact](https://docs.intifact.com/docs/consultas/pricing) | 100/mes | 30/min. Usa la API key de Consultas. [Contrato DNI](https://docs.intifact.com/docs/consultas/dni). |
-| 3 | [Factiliza](https://factiliza.com/api-consulta) | 100/mes | Cuota de API Consulta. [Contrato DNI](https://docs.factiliza.com/api-consulta/endpoint/dni). |
-| 4 | [Perú API (.com)](https://peruapi.com/precios) | 1.000/mes | 50/día, 10/min, una IP autorizada. El mes sigue el ciclo de la cuenta. [Contrato HTTP](https://peruapi.com/documentacion). |
-| | **Total nominal** | **2.200/mes** | Si todos están activos, el tope nominal es de **1.250 en un día** debido al límite diario de .com. |
+| 2 | [Factiliza](https://factiliza.com/api-consulta) | 100/mes | Cuota de API Consulta. [Contrato DNI](https://docs.factiliza.com/api-consulta/endpoint/dni). |
+| 3 | [Perú API (.com)](https://peruapi.com/precios) | 1.000/mes | 50/día, 10/min, una IP autorizada. El mes sigue el ciclo de la cuenta. [Contrato HTTP](https://peruapi.com/documentacion). |
+| | **Total nominal** | **2.100/mes** | Cupo combinado con los tres proveedores habilitados. |
 
 Una consulta consumida no garantiza una persona encontrada. Los proveedores pueden compartir fuentes, responder sin coincidencia o descontar los intentos que fallen. Cada proveedor controla su cupo y lo aplica a todos los sistemas que comparten la cuenta. Usa llaves dedicadas y consulta el saldo en los paneles. [Apis.net.pe migró a Decolecta](https://apis.net.pe/); no se contaron como dos proveedores ni se asumió un cupo de DNI sin publicación verificable.
 
@@ -20,8 +19,7 @@ El primer mes de APISPERU es la única vía gratuita verificada públicamente en
 
 | Proveedor | Registro | Paso pendiente |
 | --- | --- | --- |
-| APISPERU | [Panel API Consultas](https://apisperu.com/admin/dniruc) | Cuenta creada. Falta activar API de Consultas DNI/RUC y comprobar si el panel ofrece la promoción. |
-| Intifact | [Alta](https://intifact.com/empezar) | Contraseña, código por correo y ficha del negocio. Generar la llave de Consultas. |
+| APISPERU | [Panel API Consultas](https://apisperu.com/admin/dniruc) | Token configurado en el entorno local. Confirma en el panel si la cuenta tiene la promoción. |
 | Factiliza | [Panel API Consulta](https://app.factiliza.com/api-consulta) | Cuenta activada y token configurado en el entorno local. |
 | Perú API (.com) | [Panel](https://peruapi.com/panel) | Cuenta activada y token configurado en el entorno local. Su ciclo mensual comienza el día 11. Autorizar la IP de salida de la Lambda al desplegar. |
 

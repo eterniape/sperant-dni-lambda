@@ -8,7 +8,6 @@ test('configured environment tokens activate only their providers in priority or
     env: {
       DNI_TOKEN_PERUAPI_COM: 'test-com',
       DNI_TOKEN_FACTILIZA: 'test-factiliza',
-      DNI_TOKEN_INTIFACT: '',
       DNI_TOKEN_APISPERU: 'test-apisperu',
       DNI_PERUAPI_COM_BILLING_DAY: '21',
     },

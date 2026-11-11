@@ -2,7 +2,7 @@
 
 Servicio interno que devuelve nombres y apellidos a partir de un DNI peruano. API Gateway envía el POST a una Lambda, que consulta los proveedores de forma secuencial. Si un proveedor falla, agota su cuota o no encuentra el DNI, la Lambda prueba el siguiente. Devuelve la primera coincidencia válida en la misma respuesta HTTP.
 
-Con la configuración actual, el orden es **Factiliza → Perú API (.com)**. El cupo nominal recurrente de ambas cuentas suma hasta **1.100 consultas al mes**, con un máximo de 50 al día en Perú API. Cada proveedor aplica los límites de su propia cuenta. [Cupos y proveedores disponibles](docs/proveedores.md).
+El orden de consulta por defecto es **APISPERU → Factiliza → Perú API (.com)**. Con los tres proveedores habilitados, el cupo gratuito recurrente suma hasta **2.100 consultas al mes**, con un máximo de 50 al día en Perú API. Cada proveedor aplica los límites de su propia cuenta. [Cupos y proveedores disponibles](docs/proveedores.md).
 
 El módulo `service/src/dni` separa la validación de identidad (`domain`), la resolución secuencial (`application`), las integraciones (`infrastructure`) y el contrato HTTP (`transport`). [Plantilla de AWS SAM](template.yaml).
 
@@ -67,7 +67,7 @@ Una coincidencia devuelve **200 OK** con el siguiente cuerpo. `apellidoMaterno` 
 | 429 | API Gateway aplicó su límite de peticiones. |
 | 503 | `PROVIDERS_UNAVAILABLE` cuando ningún proveedor pudo resolver la consulta y al menos uno no respondió de forma concluyente, o cuando no hay proveedores configurados. `SERVICE_UNAVAILABLE` indica un error interno. |
 
-Un `503` puede incluir `Retry-After` en segundos y, para `PROVIDERS_UNAVAILABLE`, `retryAt` en UTC. Si el backend reintenta, envía otro POST después de ese plazo. Cada POST puede consumir cupo. El timeout de cada proveedor es de 2,3 segundos y el de la Lambda es de 20 segundos. Todas las respuestas de la Lambda llevan `Cache-Control: no-store`.
+Un `503` puede incluir `Retry-After` en segundos y, para `PROVIDERS_UNAVAILABLE`, `retryAt` en UTC. Si el backend reintenta, envía otro POST después de ese plazo. Cada POST puede consumir cupo. El tiempo límite es de 14 segundos para Factiliza, 2,3 segundos para cada uno de los otros proveedores y 27 segundos para la Lambda. Todas las respuestas de la Lambda llevan `Cache-Control: no-store`.
 
 ## Token y variables de entorno
 
@@ -78,7 +78,7 @@ Configura `DNI_BASE_URL` en el backend con la salida `LookupUrl` del stack. Guar
 | `DNI_BASE_URL` | URL completa del POST para el backend. |
 | `DNI_CLIENT_TOKEN` | Token Bearer del backend y del servidor local de pruebas. |
 | `DNI_LOCAL_PORT` | Puerto local opcional. Valor por defecto 3000. |
-| `DNI_TOKEN_FACTILIZA`, `DNI_TOKEN_PERUAPI_COM`, `DNI_TOKEN_APISPERU`, `DNI_TOKEN_INTIFACT` | Llaves de proveedores. Un token vacío deja fuera al proveedor. |
+| `DNI_TOKEN_APISPERU`, `DNI_TOKEN_FACTILIZA`, `DNI_TOKEN_PERUAPI_COM` | Llaves de proveedores. Un token vacío deja fuera al proveedor. |
 | `DNI_PERUAPI_COM_BILLING_DAY` | Día de inicio del ciclo de Perú API para estimar el próximo reinicio si se agota el cupo. La cuenta configurada usa el día 11. |
 | `ClientAuthSecretArn`, `ProvidersSecretArn` | ARN de los secretos del token Bearer y de los proveedores, respectivamente. |
 
@@ -93,7 +93,7 @@ La [guía de despliegue](docs/despliegue.md) describe cómo preparar los secreto
 ### Tokens de proveedores
 
 - **Secrets Manager en AWS.** Ejecuta `node scripts/prepare-deploy.mjs --stage prod` para preparar la configuración del `.env`. Carga `providers.json` como secreto y pasa su ARN en `ProvidersSecretArn`. El orden de los proveedores en el secreto es el orden de consulta. [Formato del secreto](docs/providers.example.json).
-- **Variables de la Lambda.** Si dejas `ProvidersSecretArn` vacío, configura los tokens de [.env.example](.env.example) en `HttpFunction` mediante tu mecanismo de despliegue. Se consultan en este orden si están habilitados: APISPERU, Intifact, Factiliza y Perú API (.com).
+- **Variables de la Lambda.** Si dejas `ProvidersSecretArn` vacío, configura los tokens de [.env.example](.env.example) en `HttpFunction` mediante tu mecanismo de despliegue. El servicio consulta APISPERU, Factiliza y Perú API (.com) en ese orden cuando están habilitados.
 
 La Lambda procesa el DNI y los nombres durante la solicitud y no los guarda. Los logs de AWS tienen 14 días de retención y registran el resultado técnico de cada proveedor sin DNI, nombres ni tokens.
 

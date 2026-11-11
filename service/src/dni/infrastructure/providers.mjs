@@ -9,12 +9,9 @@ const specs = new Map([
     auth: (url, headers, token) => url.searchParams.set('token', token),
     map: (body) => body?.success === false ? {} : camel(body),
   }],
-  ['intifact', {
-    url: (dni) => new URL(`https://api-consultas.intifact.com/api/v1/dni/${dni}`),
-    map: (body) => body?.success === true ? camel(body.data) : {},
-  }],
   ['factiliza', {
     url: (dni) => new URL(`https://api.factiliza.com/v1/dni/info/${dni}`),
+    timeoutMs: 14_000,
     map: (body) => body?.success === true ? snake(body.data, body.data?.numero) : {},
   }],
   ['peruapi-com', {
@@ -71,13 +68,13 @@ function interpret(response, body, billingDay, now) {
   }
   if ((response.status === 404 && body && typeof body === 'object' && !Array.isArray(body)) ||
     code === 'dni_not_found' ||
-    (body?.success === false && /(?:dni|documento|persona|registro).{0,24}(?:no encontrad|no existe)|no se encontr[oó].{0,12}(?:dni|documento|persona|registro)/u.test(message))) {
+    (body?.success === false && /(?:dni|documento|persona|registro).{0,24}(?:no encontrad|no existe)|no se encontro.{0,12}(?:dni|documento|persona|registro)|^no se encontraron resultados\.?$/u.test(message))) {
     return { kind: 'not_found' };
   }
   if (!response.ok || !body) return { kind: 'temporary', retryAt: headerRetry };
 }
 
-export function createProviders(config, { fetchImpl = fetch, now = Date.now, timeoutMs = 2300 } = {}) {
+export function createProviders(config, { fetchImpl = fetch, now = Date.now, timeoutMs } = {}) {
   if (!Array.isArray(config.providers) || config.providers.length > specs.size) {
     throw new Error('Invalid providers configuration');
   }
@@ -89,6 +86,7 @@ export function createProviders(config, { fetchImpl = fetch, now = Date.now, tim
       throw new Error('Invalid provider configuration');
     }
     seen.add(id);
+    const requestTimeout = timeoutMs ?? spec.timeoutMs ?? 2300;
     return {
       id,
       async lookup(dni) {
@@ -98,7 +96,7 @@ export function createProviders(config, { fetchImpl = fetch, now = Date.now, tim
         if (spec.auth) spec.auth(url, headers, token);
         else headers.Authorization = `Bearer ${token}`;
         try {
-          const response = await fetchImpl(url, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+          const response = await fetchImpl(url, { headers, redirect: 'error', signal: AbortSignal.timeout(requestTimeout) });
           const body = await readJson(response).catch((err) => {
             if (err instanceof SyntaxError) return null;
             throw err;
