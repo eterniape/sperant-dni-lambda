@@ -66,9 +66,6 @@ async function main() {
 
   console.log(`Proveedores: ${providers.map(({ id }) => id).join(', ')}`);
   console.log(`Archivos privados para Secrets Manager: ${target}/providers.json y ${target}/client-auth.json`);
-  if (providers.some(({ id }) => id === 'peruapi-com')) {
-    console.log('Autoriza en Perú API la IP fija de salida de la Lambda antes de ponerla en servicio.');
-  }
 }
 
 try {

@@ -6,18 +6,15 @@ import { createProviders } from '../src/dni/infrastructure/providers.mjs';
 test('configured environment tokens activate only their providers in priority order', async () => {
   const load = createProviderConfigLoader({
     env: {
-      DNI_TOKEN_PERUAPI_COM: 'test-com',
       DNI_TOKEN_FACTILIZA: 'test-factiliza',
       DNI_TOKEN_APISPERU: 'test-apisperu',
-      DNI_PERUAPI_COM_BILLING_DAY: '21',
     },
     loadSecret: () => assert.fail('No ARN was configured'),
   });
 
   const config = await load();
   const providers = createProviders(config);
-  assert.deepEqual(providers.map(({ id }) => id), ['apisperu', 'factiliza', 'peruapi-com']);
-  assert.equal(config.providers[2].billingDay, 21);
+  assert.deepEqual(providers.map(({ id }) => id), ['apisperu', 'factiliza']);
 });
 
 test('Secrets Manager takes precedence; a secret failure does not switch accounts silently', async () => {

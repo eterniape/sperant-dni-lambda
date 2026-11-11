@@ -10,7 +10,6 @@ const expected = { kind: 'found', data: { nombres: 'Ana María', apellidoPaterno
 for (const [id, path, body, auth] of [
   ['apisperu', '/api/v1/dni/00000001', { ...camel, codVerifica: '7' }, 'query'],
   ['factiliza', '/v1/dni/info/00000001', { success: true, data: { ...snake, numero: dni, direccion: 'Omitir' } }, 'bearer'],
-  ['peruapi-com', '/api/dni/00000001', { ...snake, code: '200' }, 'api-key'],
 ]) {
   test(`${id} uses the documented contract and returns only normalized names`, async () => {
     const [provider] = createProviders({ providers: [{ id, token: 'test-token' }] }, {
@@ -20,8 +19,7 @@ for (const [id, path, body, auth] of [
         assert.equal(options.redirect, 'error');
         assert.ok(options.signal instanceof AbortSignal);
         if (auth === 'query') assert.equal(url.searchParams.get('token'), 'test-token');
-        else if (auth === 'bearer') assert.equal(options.headers.Authorization, 'Bearer test-token');
-        else assert.equal(options.headers['X-API-KEY'], 'test-token');
+        else assert.equal(options.headers.Authorization, 'Bearer test-token');
         return Response.json(body);
       },
     });
@@ -50,6 +48,15 @@ test('separates 404, invalid payload, quota, rate limit, invalid credential and 
 });
 
 test('rejects invalid provider configuration', () => {
-  assert.throws(() => createProviders({ providers: [{ id: 'peruapi-com', token: 'test', billingDay: 32 }] }));
+  assert.throws(() => createProviders({ providers: [{ id: 'factiliza', token: 'test', billingDay: 32 }] }));
   assert.throws(() => createProviders({ providers: [{ id: 'apisperu', token: 'REEMPLAZAR' }] }));
+});
+
+test('ignores the retired provider in existing secrets and keeps the supported providers', () => {
+  const providers = createProviders({ providers: [
+    { id: 'apisperu', token: 'test-apisperu' },
+    { id: 'factiliza', token: 'test-factiliza' },
+    { id: 'peruapi-com', token: 'test-retired', billingDay: 11 },
+  ] });
+  assert.deepEqual(providers.map(({ id }) => id), ['apisperu', 'factiliza']);
 });

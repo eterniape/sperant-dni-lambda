@@ -2,7 +2,6 @@
 const tokens = [
   ['apisperu', 'DNI_TOKEN_APISPERU'],
   ['factiliza', 'DNI_TOKEN_FACTILIZA'],
-  ['peruapi-com', 'DNI_TOKEN_PERUAPI_COM'],
 ];
 
 export function createProviderConfigLoader({ env, loadSecret }) {
@@ -13,11 +12,7 @@ export function createProviderConfigLoader({ env, loadSecret }) {
   for (const [id, variable] of tokens) {
     const token = env[variable];
     if (!token?.trim()) continue;
-    const provider = { id, token };
-    if (id === 'peruapi-com' && env.DNI_PERUAPI_COM_BILLING_DAY) {
-      provider.billingDay = Number(env.DNI_PERUAPI_COM_BILLING_DAY);
-    }
-    providers.push(provider);
+    providers.push({ id, token });
   }
 
   const config = { providers };

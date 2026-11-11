@@ -2,7 +2,6 @@ import { makeIdentity, isDni } from '../domain/identity.mjs';
 import { quotaReset } from '../domain/quota.mjs';
 
 const camel = (r) => ({ dni: r?.dni, names: r?.nombres, firstSurname: r?.apellidoPaterno, secondSurname: r?.apellidoMaterno });
-const snake = (r, dni = r?.dni) => ({ dni, names: r?.nombres, firstSurname: r?.apellido_paterno, secondSurname: r?.apellido_materno });
 const specs = new Map([
   ['apisperu', {
     url: (dni) => new URL(`https://dniruc.apisperu.com/api/v1/dni/${dni}`),
@@ -12,12 +11,14 @@ const specs = new Map([
   ['factiliza', {
     url: (dni) => new URL(`https://api.factiliza.com/v1/dni/info/${dni}`),
     timeoutMs: 14_000,
-    map: (body) => body?.success === true ? snake(body.data, body.data?.numero) : {},
-  }],
-  ['peruapi-com', {
-    url: (dni) => new URL(`https://peruapi.com/api/dni/${dni}`),
-    auth: (url, headers, token) => { headers['X-API-KEY'] = token; },
-    map: (body) => String(body?.code) === '200' ? snake(body) : {},
+    map: (body) => {
+      if (body?.success !== true) return {};
+      const data = body.data;
+      return {
+        dni: data?.numero, names: data?.nombres,
+        firstSurname: data?.apellido_paterno, secondSurname: data?.apellido_materno,
+      };
+    },
   }],
 ]);
 
@@ -75,11 +76,16 @@ function interpret(response, body, billingDay, now) {
 }
 
 export function createProviders(config, { fetchImpl = fetch, now = Date.now, timeoutMs } = {}) {
-  if (!Array.isArray(config.providers) || config.providers.length > specs.size) {
+  if (!Array.isArray(config.providers)) {
+    throw new Error('Invalid providers configuration');
+  }
+  // Secrets saved before this change may still include the retired provider.
+  const configured = config.providers.filter((provider) => provider?.id !== 'peruapi-com');
+  if (configured.length > specs.size) {
     throw new Error('Invalid providers configuration');
   }
   const seen = new Set();
-  return config.providers.map(({ id, token, billingDay = 1 }) => {
+  return configured.map(({ id, token, billingDay = 1 }) => {
     const spec = specs.get(id);
     if (!spec || seen.has(id) || typeof token !== 'string' || !token.trim() || token === 'REEMPLAZAR' || /[\x00-\x20\x7f]/u.test(token) ||
       !Number.isInteger(billingDay) || billingDay < 1 || billingDay > 31) {
